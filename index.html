@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Mini Minecraft - Chunked (Step 8 – Sprint + Crouch)</title>
+<title>Mini Minecraft - Chunked (Step 10 – Save/Load)</title>
 
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -183,9 +183,6 @@
 </div>
 
 <script>
-
-
-
 /* -------------------------------------------------------
    BASIC THREE.JS SETUP
 ------------------------------------------------------- */
@@ -198,6 +195,7 @@ const camera = new THREE.PerspectiveCamera(
     0.1,
     200
 );
+
 // NEW: sky / background
 // Simple gradient sky using an inverted sphere
 const skyGeo = new THREE.SphereGeometry(200, 32, 32);
@@ -237,11 +235,10 @@ document.body.appendChild(renderer.domElement);
 const player = new THREE.Object3D();
 scene.add(player);
 
-// FIXED: camera height alignment (from previous step)
 // Camera is always at head height relative to player.
 const CAMERA_STAND_Y = 1.6;
-const CAMERA_CROUCH_Y = 1.0;         // NEW: crouch eye height
-let cameraBaseY = CAMERA_STAND_Y;    // NEW: current camera base height
+const CAMERA_CROUCH_Y = 1.0;         // crouch eye height
+let cameraBaseY = CAMERA_STAND_Y;    // current camera base height
 camera.position.set(0, CAMERA_STAND_Y, 0);
 player.add(camera);
 
@@ -256,12 +253,12 @@ const GRAVITY = 13.0;
 const JUMP_SPEED = 5.0;
 const TERMINAL_VEL = -35.0;
 
-// Player height (capsule) – now dynamic for crouching
-const PLAYER_HEIGHT_STAND = 1.8;     // NEW: standing height
-const PLAYER_HEIGHT_CROUCH = 0.9;    // NEW: crouching height
-let PLAYER_HEIGHT = PLAYER_HEIGHT_STAND; // NEW: current height used in collision
+// Player height (capsule) – dynamic for crouching
+const PLAYER_HEIGHT_STAND = 1.8;
+const PLAYER_HEIGHT_CROUCH = 0.9;
+let PLAYER_HEIGHT = PLAYER_HEIGHT_STAND;
 
-// FIXED: step up / block climbing (from previous step)
+// step-up height
 const STEP_HEIGHT = 1.0;
 
 const move = {
@@ -323,17 +320,16 @@ scene.add(ambientLight);
 ------------------------------------------------------- */
 // NEW: block colors / textures
 // FIXED: grass block faces
-const grassTopMat    = new THREE.MeshStandardMaterial({  color: 0x55cc55}); // bright green
-const grassSideMat   = new THREE.MeshStandardMaterial({  color: 0x55cc55 }); // dirt brown
-const grassBottomMat = new THREE.MeshStandardMaterial({  color: 0x55cc55 }); // dirt brown
-
+// FIXED: grass block faces
+const grassTopMat    = new THREE.MeshStandardMaterial({ color: 0x55cc55 }); // bright green (top)
+const grassSideMat   = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // dirt brown (sides)
+const grassBottomMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // dirt brown (bottom)
 
 const materials = {
-    grass: [ grassSideMat, grassTopMat, grassBottomMat ], // <-- multi-material array
+    grass: [ grassSideMat, grassTopMat, grassBottomMat ], // multi-material array
     dirt:  new THREE.MeshStandardMaterial({ color: 0x8B4513 }),
     stone: new THREE.MeshStandardMaterial({ color: 0x888888 })
 };
-
 
 /* -------------------------------------------------------
    NEW: chunk system
@@ -343,21 +339,18 @@ const CHUNK_HEIGHT = 16;
 const RENDER_DISTANCE_CHUNKS = 8;
 
 const baseGeometry = new THREE.BoxGeometry(1, 1, 1);
-// NEW: block colors / textures
-// Add geometry groups so grass can have different materials on top/sides/bottom
 // FIXED: grass block faces
-// Define geometry groups so InstancedMesh can use 3 materials
 baseGeometry.clearGroups();
 
-// Sides (first 4 faces = 4 * 6 vertices)
-baseGeometry.addGroup(0, 4 * 6, 0);
+// Face order in BoxGeometry: +X, -X, +Y, -Y, +Z, -Z
+// Sides: +X, -X, +Z, -Z → indices 0, 1, 4, 5
+baseGeometry.addGroup(0 * 6, 6, 0); // +X → sides
+baseGeometry.addGroup(1 * 6, 6, 0); // -X → sides
+baseGeometry.addGroup(4 * 6, 6, 0); // +Z → sides
+baseGeometry.addGroup(5 * 6, 6, 0); // -Z → sides
 
-// Top face (next 6 vertices)
-baseGeometry.addGroup(4 * 6, 1 * 6, 1);
-
-// Bottom face (last 6 vertices)
-baseGeometry.addGroup(5 * 6, 1 * 6, 2);
-
+baseGeometry.addGroup(2 * 6, 6, 1); // +Y → top
+baseGeometry.addGroup(3 * 6, 6, 2); // -Y → bottom
 // Global block registry: world coords -> { type, chunkKey, index }
 const blocks = {};
 
@@ -386,8 +379,6 @@ let chunkRaycastMeshes = [];
 
 const MAX_INSTANCES_PER_CHUNK_TYPE = CHUNK_SIZE * CHUNK_SIZE * 4;
 
-// NEW: block colors / textures
-// FIXED: grass block faces
 function createChunkMesh(type) {
     const mat = materials[type]; // may be array (grass) or single material
     const mesh = new THREE.InstancedMesh(baseGeometry, mat, MAX_INSTANCES_PER_CHUNK_TYPE);
@@ -457,7 +448,7 @@ function createChunk(cx, cz) {
 
     chunkRaycastMeshes.push(meshes.grass, meshes.dirt, meshes.stone);
 
-    // world generation for chunks
+    // world generation for chunks (flat world)
     const { x0, z0, x1, z1 } = chunkWorldBounds(cx, cz);
     for (let x = x0; x <= x1; x++) {
         for (let z = z0; z <= z1; z++) {
@@ -552,7 +543,6 @@ function removeBlock(x, y, z) {
 // NEW: save world
 // -------------------------------------------------------
 // Saves all blocks currently stored in the global `blocks` map.
-// Only stores {x,y,z,type} for each block.
 function saveWorld() {
     const worldData = [];
 
@@ -598,9 +588,6 @@ function updateChunksAroundPlayer(dt) {
         }
     }
 }
-
-// Ensure ground exists at start
-updateChunksAroundPlayer(999);
 
 /* -------------------------------------------------------
    INVENTORY
@@ -676,6 +663,27 @@ function respawnPlayer() {
     PLAYER_HEIGHT = PLAYER_HEIGHT_STAND;
     camera.position.y = CAMERA_STAND_Y;
     updateHealthUI();
+}
+
+// -------------------------------------------------------
+// NEW: save/load player position
+// -------------------------------------------------------
+function savePlayerPosition() {
+    const pos = {
+        x: player.position.x,
+        y: player.position.y,
+        z: player.position.z
+    };
+    localStorage.setItem("voxel_player_pos", JSON.stringify(pos));
+}
+
+function loadPlayerPosition() {
+    const raw = localStorage.getItem("voxel_player_pos");
+    if (!raw) return false;
+
+    const pos = JSON.parse(raw);
+    player.position.set(pos.x, pos.y, pos.z);
+    return true;
 }
 
 /* -------------------------------------------------------
@@ -806,12 +814,12 @@ document.addEventListener("keydown", (e) => {
         }
     }
 
-    // NEW: sprinting (hold Shift)
+    // sprinting (hold Shift)
     if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         isSprinting = true;
     }
 
-    // NEW: crouching (hold Ctrl or C)
+    // crouching (hold Ctrl or C)
     if (e.code === "ControlLeft" || e.code === "ControlRight" || e.code === "KeyC") {
         isCrouching = true;
     }
@@ -823,12 +831,12 @@ document.addEventListener("keyup", (e) => {
     if (e.code === "KeyA") move.left = false;
     if (e.code === "KeyD") move.right = false;
 
-    // NEW: sprinting
+    // sprinting
     if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
         isSprinting = false;
     }
 
-    // NEW: crouching
+    // crouching
     if (e.code === "ControlLeft" || e.code === "ControlRight" || e.code === "KeyC") {
         isCrouching = false;
     }
@@ -899,7 +907,7 @@ const moveDir    = new THREE.Vector3();
 
 let lastPosText = "";
 
-// step-up handling: see tryMoveHorizontal
+// step-up handling
 function tryMoveHorizontal(dx, dz) {
     if (dx === 0 && dz === 0) return;
 
@@ -918,6 +926,21 @@ function tryMoveHorizontal(dx, dz) {
         player.position.x = targetX;
         player.position.z = targetZ;
     }
+}
+
+/* -------------------------------------------------------
+   NEW: load world + player on startup
+------------------------------------------------------- */
+const worldLoaded = loadWorld();
+if (!worldLoaded) {
+    // No saved world → generate default terrain around spawn
+    updateChunksAroundPlayer(999);
+}
+
+const playerLoaded = loadPlayerPosition();
+if (!playerLoaded) {
+    // No saved player → use default spawn
+    player.position.copy(spawnPoint);
 }
 
 function animate() {
@@ -939,7 +962,7 @@ function animate() {
 
     rightVec.crossVectors(forwardVec, upVec).normalize();
 
-    // NEW: sprinting + crouching speed logic
+    // sprinting + crouching speed logic
     let speed = WALK_SPEED;
     if (isSprinting && !isCrouching) {
         speed *= SPRINT_MULTIPLIER;
@@ -956,11 +979,10 @@ function animate() {
         moveDir.normalize().multiplyScalar(speed);
     }
 
-    // NEW: crouching collider & camera base
+    // crouching collider & camera base
     const targetHeight = isCrouching ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
     const targetCameraBase = isCrouching ? CAMERA_CROUCH_Y : CAMERA_STAND_Y;
 
-    // simple smoothing when changing stance
     PLAYER_HEIGHT += (targetHeight - PLAYER_HEIGHT) * 10 * dt;
     cameraBaseY += (targetCameraBase - cameraBaseY) * 10 * dt;
 
@@ -973,7 +995,6 @@ function animate() {
     // horizontal movement + step-up
     tryMoveHorizontal(moveDir.x, moveDir.z);
 
-    let wasOnGround = onGround;
     onGround = false;
 
     // vertical collision & fall damage
@@ -1032,10 +1053,18 @@ window.addEventListener("resize", () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
-// -------------------------------------------------------
-// PREVENT DEFAULT BROWSER ACTIONS
-// -------------------------------------------------------
 
+/* -------------------------------------------------------
+   NEW: auto-save on exit
+------------------------------------------------------- */
+window.addEventListener("beforeunload", () => {
+    saveWorld();
+    savePlayerPosition();
+});
+
+/* -------------------------------------------------------
+   PREVENT DEFAULT BROWSER ACTIONS
+------------------------------------------------------- */
 // Keys we want to block while playing
 const blockedKeys = new Set([
     "KeyW", "KeyA", "KeyS", "KeyD",
