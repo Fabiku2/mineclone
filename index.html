@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Mini Minecraft - Chunked (Steps 11–15)</title>
+<title>Mini Minecraft - Chunked (Steps 16–20)</title>
 
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -186,6 +186,11 @@
     </div>
 </div>
 
+<!-- NEW: minimap overlay -->
+<canvas id="minimap" width="150" height="150"
+        style="position:fixed; top:10px; left:50%; transform:translateX(-50%);
+               border:2px solid #fff; background:rgba(0,0,0,0.5);"></canvas>
+
 <!-- NEW: basic sound effects -->
 <audio id="snd-jump"  src="sounds/jump.wav"  preload="auto"></audio>
 <audio id="snd-land"  src="sounds/land.wav"  preload="auto"></audio>
@@ -335,10 +340,35 @@ const grassTopMat    = new THREE.MeshStandardMaterial({ color: 0x55cc55 }); // b
 const grassSideMat   = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // dirt brown (sides)
 const grassBottomMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // dirt brown (bottom)
 
+// NEW: water material (Step 16)
+const waterMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3399ff,
+    transparent: true,
+    opacity: 0.5,
+    roughness: 0.2,
+    metalness: 0.0
+});
+
+// NEW: tree materials (Step 17)
+const logMaterial    = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
+const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x228b22 });
+
+// NEW: ladder material (Step 18)
+const ladderMaterial = new THREE.MeshStandardMaterial({
+    color: 0xdeb887,
+    transparent: true,
+    opacity: 0.9
+});
+
 const materials = {
     grass: [ grassSideMat, grassTopMat, grassBottomMat ], // multi-material array
     dirt:  new THREE.MeshStandardMaterial({ color: 0x8B4513 }),
-    stone: new THREE.MeshStandardMaterial({ color: 0x888888 })
+    stone: new THREE.MeshStandardMaterial({ color: 0x888888 }),
+    // NEW: water + tree + ladder types
+    water:  waterMaterial,
+    log:    logMaterial,
+    leaves: leavesMaterial,
+    ladder: ladderMaterial
 };
 
 /* -------------------------------------------------------
@@ -433,6 +463,37 @@ function ensureChunkForBlock(x, y, z) {
     return createChunk(cx, cz);
 }
 
+// NEW: basic tree generation (Step 17)
+function spawnTree(chunk, x, z) {
+    const groundKey = blockKey(x, 0, z);
+    if (!blocks[groundKey]) return;
+
+    for (let y = 1; y <= 5; y++) {
+        if (blocks[blockKey(x, y, z)]) return;
+    }
+
+    const trunkHeight = 3 + Math.floor(Math.random() * 2); // 3–4
+    for (let y = 1; y <= trunkHeight; y++) {
+        addBlockToChunk(chunk, x, y, z, "log");
+    }
+
+    const topY = trunkHeight + 1;
+    for (let dx = -2; dx <= 2; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+            for (let dy = 0; dy <= 2; dy++) {
+                const dist = Math.abs(dx) + Math.abs(dz) + dy;
+                if (dist > 4) continue;
+                const lx = x + dx;
+                const ly = topY + dy;
+                const lz = z + dz;
+                if (!blocks[blockKey(lx, ly, lz)]) {
+                    addBlockToChunk(chunk, lx, ly, lz, "leaves");
+                }
+            }
+        }
+    }
+}
+
 function createChunk(cx, cz) {
     const ck = chunkKey(cx, cz);
     if (chunks[ck]) return chunks[ck];
@@ -441,24 +502,48 @@ function createChunk(cx, cz) {
     group.userData.chunkKey = ck;
 
     const meshes = {
-        grass: createChunkMesh("grass"),
-        dirt:  createChunkMesh("dirt"),
-        stone: createChunkMesh("stone")
+        grass:  createChunkMesh("grass"),
+        dirt:   createChunkMesh("dirt"),
+        stone:  createChunkMesh("stone"),
+        water:  createChunkMesh("water"),
+        log:    createChunkMesh("log"),
+        leaves: createChunkMesh("leaves"),
+        ladder: createChunkMesh("ladder")
     };
 
-    group.add(meshes.grass, meshes.dirt, meshes.stone);
+    group.add(
+        meshes.grass,
+        meshes.dirt,
+        meshes.stone,
+        meshes.water,
+        meshes.log,
+        meshes.leaves,
+        meshes.ladder
+    );
     scene.add(group);
 
     const instanceState = {
-        grass: { next: 0, free: [] },
-        dirt:  { next: 0, free: [] },
-        stone: { next: 0, free: [] }
+        grass:  { next: 0, free: [] },
+        dirt:   { next: 0, free: [] },
+        stone:  { next: 0, free: [] },
+        water:  { next: 0, free: [] },
+        log:    { next: 0, free: [] },
+        leaves: { next: 0, free: [] },
+        ladder: { next: 0, free: [] }
     };
 
     const chunk = { cx, cz, meshes, instanceState, group };
     chunks[ck] = chunk;
 
-    chunkRaycastMeshes.push(meshes.grass, meshes.dirt, meshes.stone);
+    chunkRaycastMeshes.push(
+        meshes.grass,
+        meshes.dirt,
+        meshes.stone,
+        meshes.water,
+        meshes.log,
+        meshes.leaves,
+        meshes.ladder
+    );
 
     // world generation for chunks (flat world)
     const { x0, z0, x1, z1 } = chunkWorldBounds(cx, cz);
@@ -470,6 +555,37 @@ function createChunk(cx, cz) {
         }
     }
 
+    // NEW: simple water ponds (Step 16)
+    if (Math.random() < 0.25) {
+        const centerX = x0 + 4 + Math.floor(Math.random() * (CHUNK_SIZE - 8));
+        const centerZ = z0 + 4 + Math.floor(Math.random() * (CHUNK_SIZE - 8));
+        const radius = 2 + Math.floor(Math.random() * 2);
+
+        for (let x = centerX - radius; x <= centerX + radius; x++) {
+            for (let z = centerZ - radius; z <= centerZ + radius; z++) {
+                const dx = x - centerX;
+                const dz = z - centerZ;
+                if (dx * dx + dz * dz <= radius * radius) {
+                    const grassKey = blockKey(x, 0, z);
+                    if (blocks[grassKey]) {
+                        removeBlock(x, 0, z);
+                        addBlockToChunk(chunk, x, -1, z, "water");
+                    }
+                }
+            }
+        }
+    }
+
+    // NEW: randomly scatter a few trees per chunk (Step 17)
+    const treeAttempts = 2;
+    for (let i = 0; i < treeAttempts; i++) {
+        if (Math.random() < 0.4) {
+            const tx = x0 + 2 + Math.floor(Math.random() * (CHUNK_SIZE - 4));
+            const tz = z0 + 2 + Math.floor(Math.random() * (CHUNK_SIZE - 4));
+            spawnTree(chunk, tx, tz);
+        }
+    }
+
     return chunk;
 }
 
@@ -477,15 +593,19 @@ function disposeChunk(chunk) {
     const ck = chunkKey(chunk.cx, chunk.cz);
 
     chunkRaycastMeshes = chunkRaycastMeshes.filter(m =>
-        m !== chunk.meshes.grass &&
-        m !== chunk.meshes.dirt  &&
-        m !== chunk.meshes.stone
+        m !== chunk.meshes.grass  &&
+        m !== chunk.meshes.dirt   &&
+        m !== chunk.meshes.stone  &&
+        m !== chunk.meshes.water  &&
+        m !== chunk.meshes.log    &&
+        m !== chunk.meshes.leaves &&
+        m !== chunk.meshes.ladder
     );
 
     const bounds = chunkWorldBounds(chunk.cx, chunk.cz);
     for (let x = bounds.x0; x <= bounds.x1; x++) {
         for (let z = bounds.z0; z <= bounds.z1; z++) {
-            for (let y = -4; y <= 4; y++) {
+            for (let y = -4; y <= 8; y++) {
                 const bk = blockKey(x, y, z);
                 const data = blocks[bk];
                 if (data && data.chunkKey === ck) {
@@ -520,8 +640,10 @@ function loadWorld() {
         const chunk = chunks[b.chunkKey];
         if (chunk) {
             const mesh = chunk.meshes[b.type];
-            mesh.setMatrixAt(b.index, new THREE.Matrix4().makeTranslation(9999,9999,9999));
-            mesh.instanceMatrix.needsUpdate = true;
+            if (mesh) {
+                mesh.setMatrixAt(b.index, new THREE.Matrix4().makeTranslation(9999,9999,9999));
+                mesh.instanceMatrix.needsUpdate = true;
+            }
         }
         delete blocks[key];
     }
@@ -967,6 +1089,96 @@ function collidesWithWorld(px, py, pz) {
     return false;
 }
 
+// NEW: check if player is inside water (Step 16)
+function isPlayerInWater() {
+    const px = player.position.x;
+    const py = player.position.y;
+    const pz = player.position.z;
+
+    const playerMinX = px - PLAYER_HALF_WIDTH;
+    const playerMaxX = px + PLAYER_HALF_WIDTH;
+    const playerMinZ = pz - PLAYER_HALF_WIDTH;
+    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
+    const playerMinY = py - PLAYER_HEIGHT / 2;
+    const playerMaxY = py + PLAYER_HEIGHT / 2;
+
+    const minGX = Math.floor(playerMinX + 0.5) - 1;
+    const maxGX = Math.floor(playerMaxX + 0.5) + 1;
+    const minGY = Math.floor(playerMinY + 0.5) - 1;
+    const maxGY = Math.floor(playerMaxY + 0.5) + 1;
+    const minGZ = Math.floor(playerMinZ + 0.5) - 1;
+    const maxGZ = Math.floor(playerMaxZ + 0.5) + 1;
+
+    for (let gx = minGX; gx <= maxGX; gx++) {
+        for (let gy = minGY; gy <= maxGY; gy++) {
+            for (let gz = minGZ; gz <= maxGZ; gz++) {
+                const bk = blockKey(gx, gy, gz);
+                const b = blocks[bk];
+                if (!b || b.type !== "water") continue;
+
+                const blockMinX = gx - 0.5;
+                const blockMaxX = gx + 0.5;
+                const blockMinY = gy - 0.5;
+                const blockMaxY = gy + 0.5;
+                const blockMinZ = gz - 0.5;
+                const blockMaxZ = gz + 0.5;
+
+                const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
+                const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
+                const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
+
+                if (overlapX && overlapY && overlapZ) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// NEW: check if player is on ladder (Step 18)
+function isPlayerOnLadder() {
+    const px = player.position.x;
+    const py = player.position.y;
+    const pz = player.position.z;
+
+    const playerMinX = px - PLAYER_HALF_WIDTH;
+    const playerMaxX = px + PLAYER_HALF_WIDTH;
+    const playerMinZ = pz - PLAYER_HALF_WIDTH;
+    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
+    const playerMinY = py - PLAYER_HEIGHT / 2;
+    const playerMaxY = py + PLAYER_HEIGHT / 2;
+
+    const minGX = Math.floor(playerMinX + 0.5) - 1;
+    const maxGX = Math.floor(playerMaxX + 0.5) + 1;
+    const minGY = Math.floor(playerMinY + 0.5) - 1;
+    const maxGY = Math.floor(playerMaxY + 0.5) + 1;
+    const minGZ = Math.floor(playerMinZ + 0.5) - 1;
+    const maxGZ = Math.floor(playerMaxZ + 0.5) + 1;
+
+    for (let gx = minGX; gx <= maxGX; gx++) {
+        for (let gy = minGY; gy <= maxGY; gy++) {
+            for (let gz = minGZ; gz <= maxGZ; gz++) {
+                const bk = blockKey(gx, gy, gz);
+                const b = blocks[bk];
+                if (!b || b.type !== "ladder") continue;
+
+                const blockMinX = gx - 0.5;
+                const blockMaxX = gx + 0.5;
+                const blockMinY = gy - 0.5;
+                const blockMaxY = gy + 0.5;
+                const blockMinZ = gz - 0.5;
+                const blockMaxZ = gz + 0.5;
+
+                const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
+                const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
+                const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
+
+                if (overlapX && overlapY && overlapZ) return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* -------------------------------------------------------
    FALL DAMAGE
 ------------------------------------------------------- */
@@ -984,6 +1196,9 @@ const rightVec   = new THREE.Vector3();
 const moveDir    = new THREE.Vector3();
 
 let lastPosText = "";
+
+// NEW: simple day-night cycle time (Step 19)
+let timeOfDay = 0; // seconds
 
 // step-up handling
 function tryMoveHorizontal(dx, dz) {
@@ -1011,14 +1226,72 @@ function tryMoveHorizontal(dx, dz) {
 ------------------------------------------------------- */
 const worldLoaded = loadWorld();
 if (!worldLoaded) {
-    // No saved world → generate default terrain around spawn
     updateChunksAroundPlayer(999);
 }
 
 const playerLoaded = loadPlayerPosition();
 if (!playerLoaded) {
-    // No saved player → use default spawn
     player.position.copy(spawnPoint);
+}
+
+/* -------------------------------------------------------
+   NEW: minimap rendering (Step 20)
+------------------------------------------------------- */
+const minimapCanvas = document.getElementById("minimap");
+const minimapCtx = minimapCanvas.getContext("2d");
+
+function updateMinimap() {
+    if (!minimapCtx) return;
+
+    const w = minimapCanvas.width;
+    const h = minimapCanvas.height;
+    minimapCtx.clearRect(0, 0, w, h);
+
+    minimapCtx.fillStyle = "rgba(0,0,0,0.6)";
+    minimapCtx.fillRect(0, 0, w, h);
+
+    const px = player.position.x;
+    const pz = player.position.z;
+
+    const viewRadius = 16;
+    const scale = w / (viewRadius * 2);
+
+    for (const key in blocks) {
+        const [bx, , bz] = key.split(",").map(Number);
+        const dx = bx - px;
+        const dz = bz - pz;
+        if (Math.abs(dx) > viewRadius || Math.abs(dz) > viewRadius) continue;
+
+        const screenX = w / 2 + dx * scale;
+        const screenY = h / 2 + dz * scale;
+
+        const b = blocks[key];
+        let color = "#555555";
+        if (b.type === "grass")  color = "#22aa22";
+        else if (b.type === "dirt")   color = "#8B4513";
+        else if (b.type === "stone")  color = "#888888";
+        else if (b.type === "water")  color = "#3399ff";
+        else if (b.type === "log")    color = "#8b5a2b";
+        else if (b.type === "leaves") color = "#33cc33";
+        else if (b.type === "ladder") color = "#deb887";
+
+        minimapCtx.fillStyle = color;
+        minimapCtx.fillRect(screenX - 1, screenY - 1, 2, 2);
+    }
+
+    minimapCtx.save();
+    minimapCtx.translate(w / 2, h / 2);
+    minimapCtx.rotate(-yaw);
+
+    minimapCtx.fillStyle = "#ffff00";
+    minimapCtx.beginPath();
+    minimapCtx.moveTo(0, -5);
+    minimapCtx.lineTo(-3, 3);
+    minimapCtx.lineTo(3, 3);
+    minimapCtx.closePath();
+    minimapCtx.fill();
+
+    minimapCtx.restore();
 }
 
 function animate() {
@@ -1028,6 +1301,17 @@ function animate() {
     const delta = (now - lastTime) / 1000;
     lastTime = now;
     const dt = Math.min(delta, 0.05);
+
+    // NEW: advance time of day (Step 19)
+    timeOfDay += dt;
+    const dayLength = 120;
+    const t = (timeOfDay % dayLength) / dayLength;
+    const angle = t * Math.PI * 2;
+    const radius = 2.5;
+    const sx = Math.cos(angle) * radius;
+    const sz = Math.sin(angle) * radius;
+    const sy = 1.5;
+    sunLight.position.set(sx, sy, sz);
 
     updateChunksAroundPlayer(dt);
 
@@ -1048,6 +1332,13 @@ function animate() {
         speed *= CROUCH_MULTIPLIER;
     }
 
+    const inWater = isPlayerInWater();
+    if (inWater) {
+        speed *= 0.45; // NEW: slower in water (Step 16)
+    }
+
+    const onLadder = isPlayerOnLadder();
+
     moveDir.set(0, 0, 0);
     if (move.forward) moveDir.add(forwardVec);
     if (move.backward) moveDir.sub(forwardVec);
@@ -1057,25 +1348,33 @@ function animate() {
         moveDir.normalize().multiplyScalar(speed);
     }
 
-    // crouching collider & camera base
     const targetHeight = isCrouching ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
     const targetCameraBase = isCrouching ? CAMERA_CROUCH_Y : CAMERA_STAND_Y;
 
     PLAYER_HEIGHT += (targetHeight - PLAYER_HEIGHT) * 10 * dt;
     cameraBaseY += (targetCameraBase - cameraBaseY) * 10 * dt;
 
-    // gravity
-    velocity.y -= GRAVITY * dt;
-    if (velocity.y < TERMINAL_VEL) velocity.y = TERMINAL_VEL;
+    // gravity / ladder handling (Step 18)
+    if (onLadder) {
+        const climbSpeed = 3.0;
+        if (move.forward) {
+            velocity.y = climbSpeed;
+        } else if (move.backward) {
+            velocity.y = -climbSpeed;
+        } else {
+            velocity.y = 0;
+        }
+    } else {
+        velocity.y -= GRAVITY * dt;
+        if (velocity.y < TERMINAL_VEL) velocity.y = TERMINAL_VEL;
+    }
 
     let nextY = player.position.y + velocity.y * dt;
 
-    // horizontal movement + step-up
     tryMoveHorizontal(moveDir.x, moveDir.z);
 
     onGround = false;
 
-    // vertical collision & fall damage
     if (collidesWithWorld(player.position.x, nextY, player.position.z)) {
         if (velocity.y < 0) {
             onGround = true;
@@ -1092,11 +1391,9 @@ function animate() {
 
                 landingOffset = -Math.min(0.3, 0.05 + normalized * 0.25);
 
-                // NEW: landing dust particles
                 const dustCount = 5 + Math.floor(normalized * 10);
                 spawnLandingDust(player.position.x, player.position.y - PLAYER_HEIGHT / 2, player.position.z, dustCount);
 
-                // NEW: landing sound
                 playSound(sndLand);
             }
         }
@@ -1111,7 +1408,6 @@ function animate() {
 
     landingOffset += (0 - landingOffset) * 8 * dt;
 
-    // Camera is parented to player; we only control local Y:
     camera.position.y = cameraBaseY + landingOffset;
 
     if (playerPosLabel) {
@@ -1125,7 +1421,6 @@ function animate() {
         }
     }
 
-    // update crack effects (fade out and remove)
     if (crackEffects.length > 0) {
         const dtLocal = dt;
         for (let i = crackEffects.length - 1; i >= 0; i--) {
@@ -1141,7 +1436,6 @@ function animate() {
         }
     }
 
-    // update landing dust particles
     if (dustParticles.length > 0) {
         const dtLocal = dt;
         for (let i = dustParticles.length - 1; i >= 0; i--) {
@@ -1155,6 +1449,8 @@ function animate() {
             }
         }
     }
+
+    updateMinimap();
 
     renderer.render(scene, camera);
 }
@@ -1181,7 +1477,6 @@ window.addEventListener("beforeunload", () => {
 /* -------------------------------------------------------
    PREVENT DEFAULT BROWSER ACTIONS
 ------------------------------------------------------- */
-// Keys we want to block while playing
 const blockedKeys = new Set([
     "KeyW", "KeyA", "KeyS", "KeyD",
     "Space",
@@ -1192,12 +1487,10 @@ const blockedKeys = new Set([
     "Tab"
 ]);
 
-// Only block keys while pointer lock is active (player is in-game)
 function shouldBlockDefaults(e) {
     return document.pointerLockElement === document.body && blockedKeys.has(e.code);
 }
 
-// Block default browser actions for gameplay keys
 document.addEventListener("keydown", (e) => {
     if (shouldBlockDefaults(e)) {
         e.preventDefault();
