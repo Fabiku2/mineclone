@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mini Minecraft - Chunked (Step 8 – Sprint + Crouch)</title>
+
+<!-- Three.js CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<style>
+    body {
+        margin: 0;
+        overflow: hidden;
+        background: #87CEEB;
+        font-family: sans-serif;
+        user-select: none;
+    }
+
+    /* Crosshair */
+    #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 20px;
+        height: 20px;
+        margin-left: -10px;
+        margin-top: -10px;
+        pointer-events: none;
+        color: white;
+        font-size: 24px;
+        text-align: center;
+        line-height: 20px;
+    }
+
+    /* Hotbar */
+    #hotbar {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 10px;
+    }
+
+    .slot {
+        width: 50px;
+        height: 50px;
+        border: 3px solid white;
+        background: rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 20px;
+        position: relative;
+    }
+
+    .selected {
+        border-color: yellow;
+    }
+
+    #blockName {
+        position: fixed;
+        bottom: 80px;
+        width: 100%;
+        text-align: center;
+        color: white;
+        font-size: 20px;
+    }
+
+    /* Debug text for player position */
+    #playerPos {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        color: white;
+        font-size: 14px;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 5px 8px;
+        border-radius: 4px;
+    }
+
+    /* Health bar UI */
+    #healthContainer {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        width: 200px;
+        height: 20px;
+        border: 2px solid #fff;
+        background: rgba(0,0,0,0.4);
+    }
+    #healthBar {
+        height: 100%;
+        width: 100%;
+        background: #2ecc71;
+    }
+    #healthText {
+        position: fixed;
+        top: 34px;
+        right: 10px;
+        color: #fff;
+        font-size: 14px;
+    }
+
+    /* Inventory overlay */
+    #inventoryOverlay {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 260px;
+        background: rgba(0,0,0,0.8);
+        border: 2px solid #fff;
+        padding: 10px;
+        display: none;
+        color: #fff;
+        font-size: 14px;
+    }
+    #inventoryOverlay h2 {
+        margin: 0 0 10px 0;
+        font-size: 16px;
+        text-align: center;
+    }
+    .inv-row {
+        display: flex;
+        justify-content: space-between;
+        margin: 4px 0;
+    }
+
+    /* Small count display on hotbar slots */
+    .slot-count {
+        position: absolute;
+        bottom: 2px;
+        right: 4px;
+        font-size: 11px;
+        color: #fff;
+        opacity: 0.9;
+    }
+</style>
+</head>
+<body>
+
+<div id="crosshair">+</div>
+<div id="blockName">Grass</div>
+
+<div id="hotbar">
+    <div class="slot selected" data-block="grass">
+        1
+        <span class="slot-count" id="count-grass">0</span>
+    </div>
+    <div class="slot" data-block="dirt">
+        2
+        <span class="slot-count" id="count-dirt">0</span>
+    </div>
+    <div class="slot" data-block="stone">
+        3
+        <span class="slot-count" id="count-stone">0</span>
+    </div>
+</div>
+
+<div id="playerPos">x: 0, y: 0, z: 0</div>
+
+<div id="healthContainer">
+    <div id="healthBar"></div>
+</div>
+<div id="healthText">Health: 100 / 100</div>
+
+<div id="inventoryOverlay">
+    <h2>Inventory (E to close)</h2>
+    <div class="inv-row">
+        <span>Grass</span>
+        <span id="inv-grass">0</span>
+    </div>
+    <div class="inv-row">
+        <span>Dirt</span>
+        <span id="inv-dirt">0</span>
+    </div>
+    <div class="inv-row">
+        <span>Stone</span>
+        <span id="inv-stone">0</span>
+    </div>
+</div>
+
+<script>
+
+
+
+/* -------------------------------------------------------
+   BASIC THREE.JS SETUP
+------------------------------------------------------- */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+
+const camera = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    200
+);
+// NEW: sky / background
+// Simple gradient sky using an inverted sphere
+const skyGeo = new THREE.SphereGeometry(200, 32, 32);
+const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+        topColor: { value: new THREE.Color(0x87CEEB) },
+        bottomColor: { value: new THREE.Color(0xFFFFFF) }
+    },
+    vertexShader: `
+        varying vec3 vPos;
+        void main() {
+            vPos = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        varying vec3 vPos;
+        uniform vec3 topColor;
+        uniform vec3 bottomColor;
+        void main() {
+            float h = normalize(vPos).y * 0.5 + 0.5;
+            gl_FragColor = vec4(mix(bottomColor, topColor, h), 1.0);
+        }
+    `
+});
+const sky = new THREE.Mesh(skyGeo, skyMat);
+scene.add(sky);
+
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/* -------------------------------------------------------
+   PLAYER OBJECT + MOVEMENT STATE
+------------------------------------------------------- */
+const player = new THREE.Object3D();
+scene.add(player);
+
+// FIXED: camera height alignment (from previous step)
+// Camera is always at head height relative to player.
+const CAMERA_STAND_Y = 1.6;
+const CAMERA_CROUCH_Y = 1.0;         // NEW: crouch eye height
+let cameraBaseY = CAMERA_STAND_Y;    // NEW: current camera base height
+camera.position.set(0, CAMERA_STAND_Y, 0);
+player.add(camera);
+
+const spawnPoint = new THREE.Vector3(8, 2, 8);
+player.position.copy(spawnPoint);
+
+let velocity = new THREE.Vector3();
+let canJump = false;
+let onGround = false;
+
+const GRAVITY = 13.0;
+const JUMP_SPEED = 5.0;
+const TERMINAL_VEL = -35.0;
+
+// Player height (capsule) – now dynamic for crouching
+const PLAYER_HEIGHT_STAND = 1.8;     // NEW: standing height
+const PLAYER_HEIGHT_CROUCH = 0.9;    // NEW: crouching height
+let PLAYER_HEIGHT = PLAYER_HEIGHT_STAND; // NEW: current height used in collision
+
+// FIXED: step up / block climbing (from previous step)
+const STEP_HEIGHT = 1.0;
+
+const move = {
+    forward: false,
+    backward: false,
+    left: false,
+    right: false
+};
+
+// NEW: sprinting
+let isSprinting = false;
+const WALK_SPEED = 0.08;
+const SPRINT_MULTIPLIER = 1.8;
+
+// NEW: crouching
+let isCrouching = false;
+const CROUCH_MULTIPLIER = 0.5; // slower while crouched
+
+let landingOffset = 0;
+
+/* -------------------------------------------------------
+   POINTER LOCK + LOOK CONTROL
+------------------------------------------------------- */
+document.body.addEventListener("click", () => {
+    document.body.requestPointerLock();
+});
+
+document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement === document.body) {
+        document.addEventListener("mousemove", onMouseMove);
+    } else {
+        document.removeEventListener("mousemove", onMouseMove);
+    }
+});
+
+let pitch = 0;
+let yaw = 0;
+
+function onMouseMove(e) {
+    const sensitivity = 0.002;
+    yaw -= e.movementX * sensitivity;
+    pitch -= e.movementY * sensitivity;
+    const maxPitch = Math.PI / 2 - 0.01;
+    pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
+}
+
+/* -------------------------------------------------------
+   LIGHTING
+------------------------------------------------------- */
+const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+sunLight.position.set(1, 2, 1);
+scene.add(sunLight);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+scene.add(ambientLight);
+
+/* -------------------------------------------------------
+   MATERIALS
+------------------------------------------------------- */
+// NEW: block colors / textures
+// FIXED: grass block faces
+const grassTopMat    = new THREE.MeshStandardMaterial({  color: 0x55cc55}); // bright green
+const grassSideMat   = new THREE.MeshStandardMaterial({  color: 0x55cc55 }); // dirt brown
+const grassBottomMat = new THREE.MeshStandardMaterial({  color: 0x55cc55 }); // dirt brown
+
+
+const materials = {
+    grass: [ grassSideMat, grassTopMat, grassBottomMat ], // <-- multi-material array
+    dirt:  new THREE.MeshStandardMaterial({ color: 0x8B4513 }),
+    stone: new THREE.MeshStandardMaterial({ color: 0x888888 })
+};
+
+
+/* -------------------------------------------------------
+   NEW: chunk system
+------------------------------------------------------- */
+const CHUNK_SIZE = 16;
+const CHUNK_HEIGHT = 16;
+const RENDER_DISTANCE_CHUNKS = 8;
+
+const baseGeometry = new THREE.BoxGeometry(1, 1, 1);
+// NEW: block colors / textures
+// Add geometry groups so grass can have different materials on top/sides/bottom
+// FIXED: grass block faces
+// Define geometry groups so InstancedMesh can use 3 materials
+baseGeometry.clearGroups();
+
+// Sides (first 4 faces = 4 * 6 vertices)
+baseGeometry.addGroup(0, 4 * 6, 0);
+
+// Top face (next 6 vertices)
+baseGeometry.addGroup(4 * 6, 1 * 6, 1);
+
+// Bottom face (last 6 vertices)
+baseGeometry.addGroup(5 * 6, 1 * 6, 2);
+
+// Global block registry: world coords -> { type, chunkKey, index }
+const blocks = {};
+
+function blockKey(x, y, z) {
+    return `${x},${y},${z}`;
+}
+
+function chunkKey(cx, cz) {
+    return `${cx},${cz}`;
+}
+
+function worldToChunkCoords(x, z) {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    return { cx, cz };
+}
+
+function chunkWorldBounds(cx, cz) {
+    const x0 = cx * CHUNK_SIZE;
+    const z0 = cz * CHUNK_SIZE;
+    return { x0, z0, x1: x0 + CHUNK_SIZE - 1, z1: z0 + CHUNK_SIZE - 1 };
+}
+
+const chunks = {};
+let chunkRaycastMeshes = [];
+
+const MAX_INSTANCES_PER_CHUNK_TYPE = CHUNK_SIZE * CHUNK_SIZE * 4;
+
+// NEW: block colors / textures
+// FIXED: grass block faces
+function createChunkMesh(type) {
+    const mat = materials[type]; // may be array (grass) or single material
+    const mesh = new THREE.InstancedMesh(baseGeometry, mat, MAX_INSTANCES_PER_CHUNK_TYPE);
+    mesh.userData.type = type;
+    return mesh;
+}
+
+const dummyMatrix = new THREE.Matrix4();
+
+function setInstanceTransform(mesh, index, x, y, z) {
+    dummyMatrix.makeTranslation(x, y, z);
+    mesh.setMatrixAt(index, dummyMatrix);
+    mesh.instanceMatrix.needsUpdate = true;
+}
+
+function hideInstance(mesh, index) {
+    dummyMatrix.makeTranslation(9999, 9999, 9999);
+    mesh.setMatrixAt(index, dummyMatrix);
+    mesh.instanceMatrix.needsUpdate = true;
+}
+
+function getInstanceSlot(chunk, type) {
+    const state = chunk.instanceState[type];
+    if (state.free.length > 0) return state.free.pop();
+    if (state.next >= MAX_INSTANCES_PER_CHUNK_TYPE) return null;
+    return state.next++;
+}
+
+function addBlockToChunk(chunk, x, y, z, type) {
+    const slot = getInstanceSlot(chunk, type);
+    if (slot === null) return;
+    const mesh = chunk.meshes[type];
+    setInstanceTransform(mesh, slot, x, y, z);
+    const ck = chunkKey(chunk.cx, chunk.cz);
+    blocks[blockKey(x, y, z)] = { type, chunkKey: ck, index: slot };
+}
+
+function ensureChunkForBlock(x, y, z) {
+    const { cx, cz } = worldToChunkCoords(x, z);
+    return createChunk(cx, cz);
+}
+
+function createChunk(cx, cz) {
+    const ck = chunkKey(cx, cz);
+    if (chunks[ck]) return chunks[ck];
+
+    const group = new THREE.Group();
+    group.userData.chunkKey = ck;
+
+    const meshes = {
+        grass: createChunkMesh("grass"),
+        dirt:  createChunkMesh("dirt"),
+        stone: createChunkMesh("stone")
+    };
+
+    group.add(meshes.grass, meshes.dirt, meshes.stone);
+    scene.add(group);
+
+    const instanceState = {
+        grass: { next: 0, free: [] },
+        dirt:  { next: 0, free: [] },
+        stone: { next: 0, free: [] }
+    };
+
+    const chunk = { cx, cz, meshes, instanceState, group };
+    chunks[ck] = chunk;
+
+    chunkRaycastMeshes.push(meshes.grass, meshes.dirt, meshes.stone);
+
+    // world generation for chunks
+    const { x0, z0, x1, z1 } = chunkWorldBounds(cx, cz);
+    for (let x = x0; x <= x1; x++) {
+        for (let z = z0; z <= z1; z++) {
+            addBlockToChunk(chunk, x, -2, z, "stone");
+            addBlockToChunk(chunk, x, -1, z, "dirt");
+            addBlockToChunk(chunk, x,  0, z, "grass");
+        }
+    }
+
+    return chunk;
+}
+
+function disposeChunk(chunk) {
+    const ck = chunkKey(chunk.cx, chunk.cz);
+
+    chunkRaycastMeshes = chunkRaycastMeshes.filter(m =>
+        m !== chunk.meshes.grass &&
+        m !== chunk.meshes.dirt  &&
+        m !== chunk.meshes.stone
+    );
+
+    const bounds = chunkWorldBounds(chunk.cx, chunk.cz);
+    for (let x = bounds.x0; x <= bounds.x1; x++) {
+        for (let z = bounds.z0; z <= bounds.z1; z++) {
+            for (let y = -4; y <= 4; y++) {
+                const bk = blockKey(x, y, z);
+                const data = blocks[bk];
+                if (data && data.chunkKey === ck) {
+                    delete blocks[bk];
+                }
+            }
+        }
+    }
+
+    scene.remove(chunk.group);
+    chunk.group.traverse(obj => {
+        if (obj.isInstancedMesh) {
+            obj.geometry.dispose();
+        }
+    });
+
+    delete chunks[ck];
+}
+
+// -------------------------------------------------------
+// NEW: load world
+// -------------------------------------------------------
+function loadWorld() {
+    const raw = localStorage.getItem("voxel_world");
+    if (!raw) return false; // no saved world
+
+    const worldData = JSON.parse(raw);
+
+    // Clear existing blocks (if any)
+    for (const key in blocks) {
+        const b = blocks[key];
+        const chunk = chunks[b.chunkKey];
+        if (chunk) {
+            const mesh = chunk.meshes[b.type];
+            mesh.setMatrixAt(b.index, new THREE.Matrix4().makeTranslation(9999,9999,9999));
+            mesh.instanceMatrix.needsUpdate = true;
+        }
+        delete blocks[key];
+    }
+
+    // Recreate blocks
+    for (const b of worldData) {
+        addBlock(b.x, b.y, b.z, b.type);
+    }
+
+    return true;
+}
+
+function addBlock(x, y, z, type) {
+    const chunk = ensureChunkForBlock(x, y, z);
+    addBlockToChunk(chunk, x, y, z, type);
+}
+
+function removeBlock(x, y, z) {
+    const bk = blockKey(x, y, z);
+    const data = blocks[bk];
+    if (!data) return;
+    const chunk = chunks[data.chunkKey];
+    if (!chunk) return;
+    const mesh = chunk.meshes[data.type];
+    hideInstance(mesh, data.index);
+    chunk.instanceState[data.type].free.push(data.index);
+    delete blocks[bk];
+}
+
+// -------------------------------------------------------
+// NEW: save world
+// -------------------------------------------------------
+// Saves all blocks currently stored in the global `blocks` map.
+// Only stores {x,y,z,type} for each block.
+function saveWorld() {
+    const worldData = [];
+
+    for (const key in blocks) {
+        const b = blocks[key];
+        const [x, y, z] = key.split(",").map(Number);
+        worldData.push({ x, y, z, type: b.type });
+    }
+
+    localStorage.setItem("voxel_world", JSON.stringify(worldData));
+}
+
+/* -------------------------------------------------------
+   Chunk loading / unloading around player
+------------------------------------------------------- */
+let chunkUpdateAccumulator = 0.0;
+
+function updateChunksAroundPlayer(dt) {
+    chunkUpdateAccumulator += dt;
+    if (chunkUpdateAccumulator < 0.5) return;
+    chunkUpdateAccumulator = 0;
+
+    const cx = Math.floor(player.position.x / CHUNK_SIZE);
+    const cz = Math.floor(player.position.z / CHUNK_SIZE);
+
+    const needed = new Set();
+
+    for (let dz = -RENDER_DISTANCE_CHUNKS; dz <= RENDER_DISTANCE_CHUNKS; dz++) {
+        for (let dx = -RENDER_DISTANCE_CHUNKS; dx <= RENDER_DISTANCE_CHUNKS; dx++) {
+            const ncx = cx + dx;
+            const ncz = cz + dz;
+            const ck = chunkKey(ncx, ncz);
+            needed.add(ck);
+            if (!chunks[ck]) {
+                createChunk(ncx, ncz);
+            }
+        }
+    }
+
+    for (const ck in chunks) {
+        if (!needed.has(ck)) {
+            disposeChunk(chunks[ck]);
+        }
+    }
+}
+
+// Ensure ground exists at start
+updateChunksAroundPlayer(999);
+
+/* -------------------------------------------------------
+   INVENTORY
+------------------------------------------------------- */
+const inventory = {
+    grass: 20,
+    dirt: 20,
+    stone: 20
+};
+
+let inventoryOpen = false;
+
+const invGrassLabel = document.getElementById("inv-grass");
+const invDirtLabel  = document.getElementById("inv-dirt");
+const invStoneLabel = document.getElementById("inv-stone");
+const inventoryOverlay = document.getElementById("inventoryOverlay");
+
+const hotbarCounts = {
+    grass: document.getElementById("count-grass"),
+    dirt:  document.getElementById("count-dirt"),
+    stone: document.getElementById("count-stone")
+};
+
+let lastInventory = { grass: null, dirt: null, stone: null };
+
+function updateInventoryUI() {
+    if (inventory.grass !== lastInventory.grass) {
+        invGrassLabel.textContent = inventory.grass;
+        hotbarCounts.grass.textContent = inventory.grass;
+        lastInventory.grass = inventory.grass;
+    }
+    if (inventory.dirt !== lastInventory.dirt) {
+        invDirtLabel.textContent = inventory.dirt;
+        hotbarCounts.dirt.textContent = inventory.dirt;
+        lastInventory.dirt = inventory.dirt;
+    }
+    if (inventory.stone !== lastInventory.stone) {
+        invStoneLabel.textContent = inventory.stone;
+        hotbarCounts.stone.textContent = inventory.stone;
+        lastInventory.stone = inventory.stone;
+    }
+}
+
+updateInventoryUI();
+
+/* -------------------------------------------------------
+   HEALTH SYSTEM
+------------------------------------------------------- */
+const maxHealth = 100;
+let health = maxHealth;
+
+const healthBar   = document.getElementById("healthBar");
+const healthText  = document.getElementById("healthText");
+
+let lastHealth = null;
+
+function updateHealthUI() {
+    if (health === lastHealth) return;
+    lastHealth = health;
+    const pct = Math.max(0, Math.min(1, health / maxHealth));
+    healthBar.style.width = (pct * 100) + "%";
+    healthBar.style.background = pct > 0.3 ? "#2ecc71" : "#e74c3c";
+    healthText.textContent = `Health: ${Math.max(0, Math.floor(health))} / ${maxHealth}`;
+}
+updateHealthUI();
+
+function respawnPlayer() {
+    player.position.copy(spawnPoint);
+    velocity.set(0, 0, 0);
+    health = maxHealth;
+    landingOffset = 0;
+    cameraBaseY = CAMERA_STAND_Y;
+    PLAYER_HEIGHT = PLAYER_HEIGHT_STAND;
+    camera.position.y = CAMERA_STAND_Y;
+    updateHealthUI();
+}
+
+/* -------------------------------------------------------
+   RAYCASTING + BLOCK INTERACTION
+------------------------------------------------------- */
+const raycaster = new THREE.Raycaster();
+const rayCenter = new THREE.Vector2(0, 0);
+let selectedBlock = "grass";
+
+const PLAYER_HALF_WIDTH = 0.4;
+
+function isInsidePlayerAABB(x, y, z) {
+    const bx = x;
+    const by = y;
+    const bz = z;
+
+    const px = player.position.x;
+    const py = player.position.y;
+    const pz = player.position.z;
+
+    const playerMinX = px - PLAYER_HALF_WIDTH;
+    const playerMaxX = px + PLAYER_HALF_WIDTH;
+    const playerMinZ = pz - PLAYER_HALF_WIDTH;
+    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
+    const playerMinY = py - PLAYER_HEIGHT / 2;
+    const playerMaxY = py + PLAYER_HEIGHT / 2;
+
+    const blockMinX = bx - 0.5;
+    const blockMaxX = bx + 0.5;
+    const blockMinY = by - 0.5;
+    const blockMaxY = by + 0.5;
+    const blockMinZ = bz - 0.5;
+    const blockMaxZ = bz + 0.5;
+
+    const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
+    const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
+    const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
+
+    return overlapX && overlapY && overlapZ;
+}
+
+const tmpVector = new THREE.Vector3();
+
+document.addEventListener("mousedown", (e) => {
+    raycaster.setFromCamera(rayCenter, camera);
+
+    const intersects = raycaster.intersectObjects(chunkRaycastMeshes);
+    if (intersects.length === 0) return;
+
+    const hit = intersects[0];
+    const point = hit.point;
+    const normal = hit.face.normal;
+
+    if (e.button === 0) {
+        tmpVector.copy(point).addScaledVector(normal, -0.5);
+        const bx = Math.floor(tmpVector.x + 0.5);
+        const by = Math.floor(tmpVector.y + 0.5);
+        const bz = Math.floor(tmpVector.z + 0.5);
+
+        const bk = blockKey(bx, by, bz);
+        const data = blocks[bk];
+        if (data) {
+            inventory[data.type] = (inventory[data.type] || 0) + 1;
+            updateInventoryUI();
+            removeBlock(bx, by, bz);
+        }
+    } else if (e.button === 2) {
+        tmpVector.copy(point).addScaledVector(normal, 0.5);
+        const px = Math.floor(tmpVector.x + 0.5);
+        const py = Math.floor(tmpVector.y + 0.5);
+        const pz = Math.floor(tmpVector.z + 0.5);
+
+        if (isInsidePlayerAABB(px, py, pz)) return;
+
+        if (inventory[selectedBlock] > 0) {
+            const bk = blockKey(px, py, pz);
+            if (!blocks[bk]) {
+                addBlock(px, py, pz, selectedBlock);
+                inventory[selectedBlock]--;
+                updateInventoryUI();
+            }
+        }
+    }
+});
+
+document.addEventListener("contextmenu", e => e.preventDefault());
+
+/* -------------------------------------------------------
+   HOTBAR / UI
+------------------------------------------------------- */
+const slots = document.querySelectorAll(".slot");
+const blockName = document.getElementById("blockName");
+const playerPosLabel = document.getElementById("playerPos");
+
+function selectBlock(type) {
+    selectedBlock = type;
+    blockName.textContent = type.charAt(0).toUpperCase() + type.slice(1);
+
+    slots.forEach(s => s.classList.remove("selected"));
+    [...slots].find(s => s.dataset.block === type).classList.add("selected");
+}
+
+document.addEventListener("keydown", (e) => {
+    if (e.key === "1") selectBlock("grass");
+    if (e.key === "2") selectBlock("dirt");
+    if (e.key === "3") selectBlock("stone");
+});
+
+/* -------------------------------------------------------
+   INPUT HANDLING (movement + sprint + crouch)
+------------------------------------------------------- */
+document.addEventListener("keydown", (e) => {
+    if (e.code === "KeyW") move.forward = true;
+    if (e.code === "KeyS") move.backward = true;
+    if (e.code === "KeyA") move.left = true;
+    if (e.code === "KeyD") move.right = true;
+
+    if (e.code === "KeyE") {
+        inventoryOpen = !inventoryOpen;
+        inventoryOverlay.style.display = inventoryOpen ? "block" : "none";
+    }
+
+    if (e.code === "Space") {
+        if (onGround && canJump) {
+            velocity.y = JUMP_SPEED;
+            onGround = false;
+            canJump = false;
+        }
+    }
+
+    // NEW: sprinting (hold Shift)
+    if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
+        isSprinting = true;
+    }
+
+    // NEW: crouching (hold Ctrl or C)
+    if (e.code === "ControlLeft" || e.code === "ControlRight" || e.code === "KeyC") {
+        isCrouching = true;
+    }
+});
+
+document.addEventListener("keyup", (e) => {
+    if (e.code === "KeyW") move.forward = false;
+    if (e.code === "KeyS") move.backward = false;
+    if (e.code === "KeyA") move.left = false;
+    if (e.code === "KeyD") move.right = false;
+
+    // NEW: sprinting
+    if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
+        isSprinting = false;
+    }
+
+    // NEW: crouching
+    if (e.code === "ControlLeft" || e.code === "ControlRight" || e.code === "KeyC") {
+        isCrouching = false;
+    }
+});
+
+/* -------------------------------------------------------
+   COLLISION HELPERS
+------------------------------------------------------- */
+function isBlockAtGrid(x, y, z) {
+    return !!blocks[blockKey(x, y, z)];
+}
+
+function collidesWithWorld(px, py, pz) {
+    const playerMinX = px - PLAYER_HALF_WIDTH;
+    const playerMaxX = px + PLAYER_HALF_WIDTH;
+    const playerMinZ = pz - PLAYER_HALF_WIDTH;
+    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
+    const playerMinY = py - PLAYER_HEIGHT / 2;
+    const playerMaxY = py + PLAYER_HEIGHT / 2;
+
+    const minGX = Math.floor(playerMinX + 0.5) - 1;
+    const maxGX = Math.floor(playerMaxX + 0.5) + 1;
+    const minGY = Math.floor(playerMinY + 0.5) - 1;
+    const maxGY = Math.floor(playerMaxY + 0.5) + 1;
+    const minGZ = Math.floor(playerMinZ + 0.5) - 1;
+    const maxGZ = Math.floor(playerMaxZ + 0.5) + 1;
+
+    for (let gx = minGX; gx <= maxGX; gx++) {
+        for (let gy = minGY; gy <= maxGY; gy++) {
+            for (let gz = minGZ; gz <= maxGZ; gz++) {
+                if (!isBlockAtGrid(gx, gy, gz)) continue;
+
+                const blockMinX = gx - 0.5;
+                const blockMaxX = gx + 0.5;
+                const blockMinY = gy - 0.5;
+                const blockMaxY = gy + 0.5;
+                const blockMinZ = gz - 0.5;
+                const blockMaxZ = gz + 0.5;
+
+                const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
+                const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
+                const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
+
+                if (overlapX && overlapY && overlapZ) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/* -------------------------------------------------------
+   FALL DAMAGE
+------------------------------------------------------- */
+const SAFE_FALL_SPEED = 10;
+const FATAL_FALL_SPEED = 30;
+const DAMAGE_MULTIPLIER = 2.0;
+
+/* -------------------------------------------------------
+   OPTIMIZED: render loop + movement
+------------------------------------------------------- */
+let lastTime = performance.now();
+const forwardVec = new THREE.Vector3();
+const upVec      = new THREE.Vector3(0, 1, 0);
+const rightVec   = new THREE.Vector3();
+const moveDir    = new THREE.Vector3();
+
+let lastPosText = "";
+
+// step-up handling: see tryMoveHorizontal
+function tryMoveHorizontal(dx, dz) {
+    if (dx === 0 && dz === 0) return;
+
+    let targetX = player.position.x + dx;
+    let targetZ = player.position.z + dz;
+
+    if (!collidesWithWorld(targetX, player.position.y, targetZ)) {
+        player.position.x = targetX;
+        player.position.z = targetZ;
+        return;
+    }
+
+    const steppedY = player.position.y + STEP_HEIGHT;
+    if (!collidesWithWorld(targetX, steppedY, targetZ)) {
+        player.position.y = steppedY;
+        player.position.x = targetX;
+        player.position.z = targetZ;
+    }
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const now = performance.now();
+    const delta = (now - lastTime) / 1000;
+    lastTime = now;
+    const dt = Math.min(delta, 0.05);
+
+    updateChunksAroundPlayer(dt);
+
+    player.rotation.y = yaw;
+    camera.rotation.x = pitch;
+
+    camera.getWorldDirection(forwardVec);
+    forwardVec.y = 0;
+    forwardVec.normalize();
+
+    rightVec.crossVectors(forwardVec, upVec).normalize();
+
+    // NEW: sprinting + crouching speed logic
+    let speed = WALK_SPEED;
+    if (isSprinting && !isCrouching) {
+        speed *= SPRINT_MULTIPLIER;
+    } else if (isCrouching) {
+        speed *= CROUCH_MULTIPLIER;
+    }
+
+    moveDir.set(0, 0, 0);
+    if (move.forward) moveDir.add(forwardVec);
+    if (move.backward) moveDir.sub(forwardVec);
+    if (move.left) moveDir.sub(rightVec);
+    if (move.right) moveDir.add(rightVec);
+    if (moveDir.lengthSq() > 0) {
+        moveDir.normalize().multiplyScalar(speed);
+    }
+
+    // NEW: crouching collider & camera base
+    const targetHeight = isCrouching ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
+    const targetCameraBase = isCrouching ? CAMERA_CROUCH_Y : CAMERA_STAND_Y;
+
+    // simple smoothing when changing stance
+    PLAYER_HEIGHT += (targetHeight - PLAYER_HEIGHT) * 10 * dt;
+    cameraBaseY += (targetCameraBase - cameraBaseY) * 10 * dt;
+
+    // gravity
+    velocity.y -= GRAVITY * dt;
+    if (velocity.y < TERMINAL_VEL) velocity.y = TERMINAL_VEL;
+
+    let nextY = player.position.y + velocity.y * dt;
+
+    // horizontal movement + step-up
+    tryMoveHorizontal(moveDir.x, moveDir.z);
+
+    let wasOnGround = onGround;
+    onGround = false;
+
+    // vertical collision & fall damage
+    if (collidesWithWorld(player.position.x, nextY, player.position.z)) {
+        if (velocity.y < 0) {
+            onGround = true;
+            canJump = true;
+
+            const impactSpeed = -velocity.y;
+            if (impactSpeed > SAFE_FALL_SPEED) {
+                const excess = impactSpeed - SAFE_FALL_SPEED;
+                const normalized = Math.min(excess / (FATAL_FALL_SPEED - SAFE_FALL_SPEED), 1.0);
+                const damage = normalized * 100 * (DAMAGE_MULTIPLIER / 2);
+                health -= damage;
+                if (health < 0) health = 0;
+                updateHealthUI();
+
+                landingOffset = -Math.min(0.3, 0.05 + normalized * 0.25);
+            }
+        }
+        velocity.y = 0;
+
+        if (health <= 0) {
+            respawnPlayer();
+        }
+    } else {
+        player.position.y = nextY;
+    }
+
+    landingOffset += (0 - landingOffset) * 8 * dt;
+
+    // Camera is parented to player; we only control local Y:
+    camera.position.y = cameraBaseY + landingOffset;
+
+    if (playerPosLabel) {
+        const px = player.position.x.toFixed(2);
+        const py = player.position.y.toFixed(2);
+        const pz = player.position.z.toFixed(2);
+        const text = `x: ${px}, y: ${py}, z: ${pz} | Block: ${blockName.textContent}`;
+        if (text !== lastPosText) {
+            lastPosText = text;
+            playerPosLabel.textContent = text;
+        }
+    }
+
+    renderer.render(scene, camera);
+}
+
+animate();
+
+/* -------------------------------------------------------
+   RESIZE HANDLER
+------------------------------------------------------- */
+window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+// -------------------------------------------------------
+// PREVENT DEFAULT BROWSER ACTIONS
+// -------------------------------------------------------
+
+// Keys we want to block while playing
+const blockedKeys = new Set([
+    "KeyW", "KeyA", "KeyS", "KeyD",
+    "Space",
+    "ShiftLeft", "ShiftRight",
+    "ControlLeft", "ControlRight",
+    "KeyC",
+    "KeyE",
+    "Tab"
+]);
+
+// Only block keys while pointer lock is active (player is in-game)
+function shouldBlockDefaults(e) {
+    return document.pointerLockElement === document.body && blockedKeys.has(e.code);
+}
+
+// Block default browser actions for gameplay keys
+document.addEventListener("keydown", (e) => {
+    if (shouldBlockDefaults(e)) {
+        e.preventDefault();
+    }
+}, { passive: false });
+
+document.addEventListener("keyup", (e) => {
+    if (shouldBlockDefaults(e)) {
+        e.preventDefault();
+    }
+}, { passive: false });
+</script>
+
+</body>
+</html>
