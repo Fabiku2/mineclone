@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Mini Minecraft - Ultra Optimized</title>
+<title>Mini Minecraft - Chunk Alignment Fix</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
@@ -50,7 +50,6 @@
         color: white;
         font-size: 20px;
         position: relative;
-        /* OPTIMIZED: purely CSS-based animation, zero JS cost per frame */
         transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, border-color 0.12s ease-out;
     }
 
@@ -349,13 +348,16 @@ const materials = {
 
 /* -------------------------------------------------------
    CHUNK SYSTEM + INSTANCING
+   FIX: chunk group positioned at chunk origin and instances
+   placed using local chunk coordinates (no double-offset)
 ------------------------------------------------------- */
 const CHUNK_SIZE = 16;
 const CHUNK_HEIGHT = 16;
-const RENDER_DISTANCE_CHUNKS = 6; // OPTIMIZED: moderate render radius
+const RENDER_DISTANCE_CHUNKS = 6; // moderate render radius
 
 const baseGeometry = new THREE.BoxGeometry(1, 1, 1);
 baseGeometry.clearGroups();
+// groups for multi-material grass (sides/top/bottom)
 baseGeometry.addGroup(0 * 6, 6, 0);
 baseGeometry.addGroup(1 * 6, 6, 0);
 baseGeometry.addGroup(4 * 6, 6, 0);
@@ -391,8 +393,9 @@ function createChunkMesh(type) {
 
 const dummyMatrix = new THREE.Matrix4();
 
-function setInstanceTransform(mesh, index, x, y, z) {
-    dummyMatrix.makeTranslation(x, y, z);
+function setInstanceTransform(mesh, index, lx, y, lz) {
+    // lx, lz are local coordinates relative to chunk origin
+    dummyMatrix.makeTranslation(lx, y, lz);
     mesh.setMatrixAt(index, dummyMatrix);
     mesh.instanceMatrix.needsUpdate = true;
 }
@@ -414,8 +417,15 @@ function addBlockToChunk(chunk, x, y, z, type) {
     const slot = getInstanceSlot(chunk, type);
     if (slot === null) return;
     const mesh = chunk.meshes[type];
-    setInstanceTransform(mesh, slot, x, y, z);
+
+    // OPTIMIZED: compute local coordinates relative to chunk origin
+    const localX = x - (chunk.cx * CHUNK_SIZE);
+    const localZ = z - (chunk.cz * CHUNK_SIZE);
+
+    setInstanceTransform(mesh, slot, localX, y, localZ);
+
     const ck = chunkKey(chunk.cx, chunk.cz);
+    // store world coords in blocks map for logic and saving
     blocks[blockKey(x, y, z)] = { type, chunkKey: ck, index: slot };
 }
 
@@ -424,7 +434,7 @@ function ensureChunkForBlock(x, y, z) {
     return createChunk(cx, cz);
 }
 
-// NEW: basic tree generation
+// basic tree generation (unchanged)
 function spawnTree(chunk, x, z) {
     const groundKey = blockKey(x, 0, z);
     if (!blocks[groundKey]) return;
@@ -458,8 +468,12 @@ function createChunk(cx, cz) {
 
     const group = new THREE.Group();
     group.userData.chunkKey = ck;
-    group.matrixAutoUpdate = false; // OPTIMIZED: static transform per chunk
-    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    group.matrixAutoUpdate = false;
+
+    // FIX: position chunk group at chunk origin (not centered)
+    // This ensures instance local coordinates map directly to world coordinates:
+    // worldPosition = group.position + instanceLocalPosition
+    group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
     group.updateMatrix();
 
     const meshes = {
@@ -498,6 +512,7 @@ function createChunk(cx, cz) {
         meshes.ladder
     );
 
+    // world generation for chunk (use world coords when adding blocks)
     const { x0, z0, x1, z1 } = chunkWorldBounds(cx, cz);
     for (let x = x0; x <= x1; x++) {
         for (let z = z0; z <= z1; z++) {
@@ -507,7 +522,7 @@ function createChunk(cx, cz) {
         }
     }
 
-    // simple lakes
+    // simple lakes (carve using world coords)
     if (Math.random() < 0.25) {
         const centerX = x0 + 4 + Math.floor(Math.random() * (CHUNK_SIZE - 8));
         const centerZ = z0 + 4 + Math.floor(Math.random() * (CHUNK_SIZE - 8));
@@ -542,37 +557,63 @@ function createChunk(cx, cz) {
 
 function disposeChunk(chunk) {
     const ck = chunkKey(chunk.cx, chunk.cz);
+
     chunkRaycastMeshes = chunkRaycastMeshes.filter(m =>
-        m !== chunk.meshes.grass  &&
-        m !== chunk.meshes.dirt   &&
-        m !== chunk.meshes.stone  &&
-        m !== chunk.meshes.water  &&
-        m !== chunk.meshes.log    &&
+        m !== chunk.meshes.grass &&
+        m !== chunk.meshes.dirt  &&
+        m !== chunk.meshes.stone &&
+        m !== chunk.meshes.water &&
+        m !== chunk.meshes.log &&
         m !== chunk.meshes.leaves &&
         m !== chunk.meshes.ladder
     );
+
     const bounds = chunkWorldBounds(chunk.cx, chunk.cz);
     for (let x = bounds.x0; x <= bounds.x1; x++) {
         for (let z = bounds.z0; z <= bounds.z1; z++) {
             for (let y = -4; y <= 8; y++) {
                 const bk = blockKey(x, y, z);
                 const data = blocks[bk];
-                if (data && data.chunkKey === ck) delete blocks[bk];
+                if (data && data.chunkKey === ck) {
+                    delete blocks[bk];
+                }
             }
         }
     }
+
     scene.remove(chunk.group);
     chunk.group.traverse(obj => {
-        if (obj.isInstancedMesh) obj.geometry.dispose();
+        if (obj.isInstancedMesh) {
+            obj.geometry.dispose();
+        }
     });
+
     delete chunks[ck];
 }
 
-// SAVE/LOAD WORLD
+/* -------------------------------------------------------
+   SAVE/LOAD WORLD (robust)
+------------------------------------------------------- */
 function loadWorld() {
     const raw = localStorage.getItem("voxel_world");
     if (!raw) return false;
-    const worldData = JSON.parse(raw);
+
+    let worldData;
+    try {
+        worldData = JSON.parse(raw);
+    } catch (e) {
+        localStorage.removeItem("voxel_world");
+        return false;
+    }
+
+    // If the saved world is extremely small, treat as invalid to avoid partial floating islands
+    const MIN_BLOCKS_FOR_VALID_WORLD = 2000;
+    if (!Array.isArray(worldData) || worldData.length < MIN_BLOCKS_FOR_VALID_WORLD) {
+        localStorage.removeItem("voxel_world");
+        return false;
+    }
+
+    // Clear existing blocks (if any)
     for (const key in blocks) {
         const b = blocks[key];
         const chunk = chunks[b.chunkKey];
@@ -582,7 +623,12 @@ function loadWorld() {
         }
         delete blocks[key];
     }
-    for (const b of worldData) addBlock(b.x, b.y, b.z, b.type);
+
+    // Recreate blocks from save (world coords)
+    for (const b of worldData) {
+        addBlock(b.x, b.y, b.z, b.type);
+    }
+
     return true;
 }
 
@@ -605,28 +651,26 @@ function removeBlock(x, y, z) {
 
 function saveWorld() {
     const worldData = [];
+
     for (const key in blocks) {
         const b = blocks[key];
         const [x, y, z] = key.split(",").map(Number);
         worldData.push({ x, y, z, type: b.type });
     }
+
     localStorage.setItem("voxel_world", JSON.stringify(worldData));
 }
-// PART 2 (continuation – paste directly after PART 1)
-let chunkUpdateAccumulator = 0;
-// OPTIMIZED: re-used vectors for culling
+
+/* -------------------------------------------------------
+   CHUNK LOADING / UNLOADING
+------------------------------------------------------- */
+let chunkUpdateAccumulator = 0.0;
 const vChunkCenter = new THREE.Vector3();
 const camToChunk = new THREE.Vector3();
 
-function chunkWorldBounds(cx, cz) {
-    const x0 = cx * CHUNK_SIZE;
-    const z0 = cz * CHUNK_SIZE;
-    return { x0, z0, x1: x0 + CHUNK_SIZE - 1, z1: z0 + CHUNK_SIZE - 1 };
-}
-
 function updateChunksAroundPlayer(dt) {
     chunkUpdateAccumulator += dt;
-    if (chunkUpdateAccumulator < 0.4) return; // OPTIMIZED: slower chunk update rate
+    if (chunkUpdateAccumulator < 0.4) return;
     chunkUpdateAccumulator = 0;
 
     const cx = Math.floor(player.position.x / CHUNK_SIZE);
@@ -640,19 +684,28 @@ function updateChunksAroundPlayer(dt) {
             const ncz = cz + dz;
             const ck = chunkKey(ncx, ncz);
             needed.add(ck);
-            if (!chunks[ck]) createChunk(ncx, ncz);
+            if (!chunks[ck]) {
+                createChunk(ncx, ncz);
+            }
         }
     }
 
     for (const ck in chunks) {
-        if (!needed.has(ck)) disposeChunk(chunks[ck]);
+        if (!needed.has(ck)) {
+            disposeChunk(chunks[ck]);
+        }
     }
 }
 
 /* -------------------------------------------------------
    INVENTORY
 ------------------------------------------------------- */
-const inventory = { grass: 20, dirt: 20, stone: 20 };
+const inventory = {
+    grass: 20,
+    dirt: 20,
+    stone: 20
+};
+
 let inventoryOpen = false;
 
 const invGrassLabel = document.getElementById("inv-grass");
@@ -669,7 +722,6 @@ const hotbarCounts = {
 let lastInventory = { grass: null, dirt: null, stone: null };
 
 function updateInventoryUI() {
-    // OPTIMIZED: only touch DOM when values actually change
     if (inventory.grass !== lastInventory.grass) {
         invGrassLabel.textContent = inventory.grass;
         hotbarCounts.grass.textContent = inventory.grass;
@@ -686,15 +738,18 @@ function updateInventoryUI() {
         lastInventory.stone = inventory.stone;
     }
 }
+
 updateInventoryUI();
 
 /* -------------------------------------------------------
-   HEALTH
+   HEALTH SYSTEM
 ------------------------------------------------------- */
 const maxHealth = 100;
 let health = maxHealth;
+
 const healthBar   = document.getElementById("healthBar");
 const healthText  = document.getElementById("healthText");
+
 let lastHealth = null;
 
 function updateHealthUI() {
@@ -718,30 +773,24 @@ function respawnPlayer() {
     updateHealthUI();
 }
 
-function savePlayerPosition() {
-    const pos = { x: player.position.x, y: player.position.y, z: player.position.z };
-    localStorage.setItem("voxel_player_pos", JSON.stringify(pos));
-}
-function loadPlayerPosition() {
-    const raw = localStorage.getItem("voxel_player_pos");
-    if (!raw) return false;
-    const pos = JSON.parse(raw);
-    player.position.set(pos.x, pos.y, pos.z);
-    return true;
-}
-
 /* -------------------------------------------------------
    RAYCASTING + BLOCK INTERACTION
 ------------------------------------------------------- */
 const raycaster = new THREE.Raycaster();
 const rayCenter = new THREE.Vector2(0, 0);
 let selectedBlock = "grass";
+
 const PLAYER_HALF_WIDTH = 0.4;
 
 function isInsidePlayerAABB(x, y, z) {
+    const bx = x;
+    const by = y;
+    const bz = z;
+
     const px = player.position.x;
     const py = player.position.y;
     const pz = player.position.z;
+
     const playerMinX = px - PLAYER_HALF_WIDTH;
     const playerMaxX = px + PLAYER_HALF_WIDTH;
     const playerMinZ = pz - PLAYER_HALF_WIDTH;
@@ -749,12 +798,12 @@ function isInsidePlayerAABB(x, y, z) {
     const playerMinY = py - PLAYER_HEIGHT / 2;
     const playerMaxY = py + PLAYER_HEIGHT / 2;
 
-    const blockMinX = x - 0.5;
-    const blockMaxX = x + 0.5;
-    const blockMinY = y - 0.5;
-    const blockMaxY = y + 0.5;
-    const blockMinZ = z - 0.5;
-    const blockMaxZ = z + 0.5;
+    const blockMinX = bx - 0.5;
+    const blockMaxX = bx + 0.5;
+    const blockMinY = by - 0.5;
+    const blockMaxY = by + 0.5;
+    const blockMinZ = bz - 0.5;
+    const blockMaxZ = bz + 0.5;
 
     const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
     const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
@@ -803,8 +852,8 @@ function spawnLandingDust(x, y, z, count) {
 }
 
 document.addEventListener("mousedown", (e) => {
-    // OPTIMIZED: raycasting executed only on mouse events, not every frame
     raycaster.setFromCamera(rayCenter, camera);
+
     const intersects = raycaster.intersectObjects(chunkRaycastMeshes, false);
     if (intersects.length === 0) return;
 
@@ -859,6 +908,7 @@ const playerPosLabel = document.getElementById("playerPos");
 function selectBlock(type) {
     selectedBlock = type;
     blockName.textContent = type.charAt(0).toUpperCase() + type.slice(1);
+
     slots.forEach(s => s.classList.remove("selected"));
     [...slots].find(s => s.dataset.block === type).classList.add("selected");
 }
@@ -930,7 +980,7 @@ document.addEventListener("keyup", (e) => {
 });
 
 /* -------------------------------------------------------
-   COLLISION & ENVIRONMENT
+   COLLISION HELPERS
 ------------------------------------------------------- */
 function isBlockAtGrid(x, y, z) {
     return !!blocks[blockKey(x, y, z)];
@@ -944,12 +994,12 @@ function collidesWithWorld(px, py, pz) {
     const playerMinY = py - PLAYER_HEIGHT / 2;
     const playerMaxY = py + PLAYER_HEIGHT / 2;
 
-    const minGX = Math.floor(playerMinX) - 1;
-    const maxGX = Math.floor(playerMaxX) + 1;
-    const minGY = Math.floor(playerMinY) - 1;
-    const maxGY = Math.floor(playerMaxY) + 1;
-    const minGZ = Math.floor(playerMinZ) - 1;
-    const maxGZ = Math.floor(playerMaxZ) + 1;
+    const minGX = Math.floor(playerMinX + 0.5) - 1;
+    const maxGX = Math.floor(playerMaxX + 0.5) + 1;
+    const minGY = Math.floor(playerMinY + 0.5) - 1;
+    const maxGY = Math.floor(playerMaxY + 0.5) + 1;
+    const minGZ = Math.floor(playerMinZ + 0.5) - 1;
+    const maxGZ = Math.floor(playerMaxZ + 0.5) + 1;
 
     for (let gx = minGX; gx <= maxGX; gx++) {
         for (let gy = minGY; gy <= maxGY; gy++) {
@@ -966,93 +1016,10 @@ function collidesWithWorld(px, py, pz) {
                 const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
                 const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
                 const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
-                if (overlapX && overlapY && overlapZ) return true;
-            }
-        }
-    }
-    return false;
-}
 
-function isPlayerInWater() {
-    const px = player.position.x;
-    const py = player.position.y;
-    const pz = player.position.z;
-
-    const playerMinX = px - PLAYER_HALF_WIDTH;
-    const playerMaxX = px + PLAYER_HALF_WIDTH;
-    const playerMinZ = pz - PLAYER_HALF_WIDTH;
-    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
-    const playerMinY = py - PLAYER_HEIGHT / 2;
-    const playerMaxY = py + PLAYER_HEIGHT / 2;
-
-    const minGX = Math.floor(playerMinX) - 1;
-    const maxGX = Math.floor(playerMaxX) + 1;
-    const minGY = Math.floor(playerMinY) - 1;
-    const maxGY = Math.floor(playerMaxY) + 1;
-    const minGZ = Math.floor(playerMinZ) - 1;
-    const maxGZ = Math.floor(playerMaxZ) + 1;
-
-    for (let gx = minGX; gx <= maxGX; gx++) {
-        for (let gy = minGY; gy <= maxGY; gy++) {
-            for (let gz = minGZ; gz <= maxGZ; gz++) {
-                const bk = blockKey(gx, gy, gz);
-                const b = blocks[bk];
-                if (!b || b.type !== "water") continue;
-
-                const blockMinX = gx - 0.5;
-                const blockMaxX = gx + 0.5;
-                const blockMinY = gy - 0.5;
-                const blockMaxY = gy + 0.5;
-                const blockMinZ = gz - 0.5;
-                const blockMaxZ = gz + 0.5;
-
-                const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
-                const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
-                const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
-                if (overlapX && overlapY && overlapZ) return true;
-            }
-        }
-    }
-    return false;
-}
-
-function isPlayerOnLadder() {
-    const px = player.position.x;
-    const py = player.position.y;
-    const pz = player.position.z;
-
-    const playerMinX = px - PLAYER_HALF_WIDTH;
-    const playerMaxX = px + PLAYER_HALF_WIDTH;
-    const playerMinZ = pz - PLAYER_HALF_WIDTH;
-    const playerMaxZ = pz + PLAYER_HALF_WIDTH;
-    const playerMinY = py - PLAYER_HEIGHT / 2;
-    const playerMaxY = py + PLAYER_HEIGHT / 2;
-
-    const minGX = Math.floor(playerMinX) - 1;
-    const maxGX = Math.floor(playerMaxX) + 1;
-    const minGY = Math.floor(playerMinY) - 1;
-    const maxGY = Math.floor(playerMaxY) + 1;
-    const minGZ = Math.floor(playerMinZ) - 1;
-    const maxGZ = Math.floor(playerMaxZ) + 1;
-
-    for (let gx = minGX; gx <= maxGX; gx++) {
-        for (let gy = minGY; gy <= maxGY; gy++) {
-            for (let gz = minGZ; gz <= maxGZ; gz++) {
-                const bk = blockKey(gx, gy, gz);
-                const b = blocks[bk];
-                if (!b || b.type !== "ladder") continue;
-
-                const blockMinX = gx - 0.5;
-                const blockMaxX = gx + 0.5;
-                const blockMinY = gy - 0.5;
-                const blockMaxY = gy + 0.5;
-                const blockMinZ = gz - 0.5;
-                const blockMaxZ = gz + 0.5;
-
-                const overlapX = blockMaxX > playerMinX && blockMinX < playerMaxX;
-                const overlapY = blockMaxY > playerMinY && blockMinY < playerMaxY;
-                const overlapZ = blockMaxZ > playerMinZ && blockMinZ < playerMaxZ;
-                if (overlapX && overlapY && overlapZ) return true;
+                if (overlapX && overlapY && overlapZ) {
+                    return true;
+                }
             }
         }
     }
@@ -1060,12 +1027,15 @@ function isPlayerOnLadder() {
 }
 
 /* -------------------------------------------------------
-   FALL DAMAGE & MOVEMENT
+   FALL DAMAGE
 ------------------------------------------------------- */
 const SAFE_FALL_SPEED = 10;
 const FATAL_FALL_SPEED = 30;
 const DAMAGE_MULTIPLIER = 2.0;
 
+/* -------------------------------------------------------
+   RENDER LOOP + MOVEMENT
+------------------------------------------------------- */
 let lastTime = performance.now();
 const forwardVec = new THREE.Vector3();
 const upVec      = new THREE.Vector3(0, 1, 0);
@@ -1073,10 +1043,10 @@ const rightVec   = new THREE.Vector3();
 const moveDir    = new THREE.Vector3();
 
 let lastPosText = "";
-let timeOfDay = 0;
 
 function tryMoveHorizontal(dx, dz) {
     if (dx === 0 && dz === 0) return;
+
     let targetX = player.position.x + dx;
     let targetZ = player.position.z + dz;
 
@@ -1097,7 +1067,7 @@ function tryMoveHorizontal(dx, dz) {
 // initial world/player load
 const worldLoaded = loadWorld();
 if (!worldLoaded) updateChunksAroundPlayer(999);
-const playerLoaded = loadPlayerPosition();
+const playerLoaded = loadPlayerPosition ? loadPlayerPosition() : false;
 if (!playerLoaded) player.position.copy(spawnPoint);
 
 /* MINIMAP (THROTTLED) */
@@ -1107,7 +1077,7 @@ let minimapAccumulator = 0;
 
 function updateMinimap(dt) {
     minimapAccumulator += dt;
-    if (minimapAccumulator < 0.25) return; // OPTIMIZED: only 4x per second
+    if (minimapAccumulator < 0.25) return; // only 4x per second
     minimapAccumulator = 0;
 
     if (!minimapCtx) return;
@@ -1167,9 +1137,9 @@ function animate() {
     lastTime = now;
     const dt = Math.min(delta, 0.05);
 
-    timeOfDay += dt;
-    const dayLength = 120;
-    const t = (timeOfDay % dayLength) / dayLength;
+    // simple sun movement
+    let timeOfDay = (now / 1000) % 120;
+    const t = (timeOfDay % 120) / 120;
     const angle = t * Math.PI * 2;
     const radius = 2.5;
     sunLight.position.set(Math.cos(angle) * radius, 1.5, Math.sin(angle) * radius);
@@ -1180,7 +1150,8 @@ function animate() {
     const maxChunkDistSq = maxChunkDist * maxChunkDist;
     for (const ck in chunks) {
         const ch = chunks[ck];
-        vChunkCenter.copy(ch.group.position);
+        // compute chunk center in world coords for culling
+        vChunkCenter.set(ch.cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, ch.cz * CHUNK_SIZE + CHUNK_SIZE / 2);
         camToChunk.subVectors(vChunkCenter, camera.position);
         ch.group.visible = camToChunk.lengthSq() < maxChunkDistSq;
     }
@@ -1191,15 +1162,15 @@ function animate() {
     camera.getWorldDirection(forwardVec);
     forwardVec.y = 0;
     forwardVec.normalize();
+
     rightVec.crossVectors(forwardVec, upVec).normalize();
 
     let speed = WALK_SPEED;
-    if (isSprinting && !isCrouching) speed *= SPRINT_MULTIPLIER;
-    else if (isCrouching) speed *= CROUCH_MULTIPLIER;
-    const inWater = isPlayerInWater();
-    if (inWater) speed *= 0.45;
-
-    const onLadder = isPlayerOnLadder();
+    if (isSprinting && !isCrouching) {
+        speed *= SPRINT_MULTIPLIER;
+    } else if (isCrouching) {
+        speed *= CROUCH_MULTIPLIER;
+    }
 
     moveDir.set(0, 0, 0);
     if (move.forward) moveDir.add(forwardVec);
@@ -1212,29 +1183,26 @@ function animate() {
 
     const targetHeight = isCrouching ? PLAYER_HEIGHT_CROUCH : PLAYER_HEIGHT_STAND;
     const targetCameraBase = isCrouching ? CAMERA_CROUCH_Y : CAMERA_STAND_Y;
+
     PLAYER_HEIGHT += (targetHeight - PLAYER_HEIGHT) * 10 * dt;
     cameraBaseY += (targetCameraBase - cameraBaseY) * 10 * dt;
 
-    if (onLadder) {
-        const climbSpeed = 3.0;
-        if (move.forward) velocity.y = climbSpeed;
-        else if (move.backward) velocity.y = -climbSpeed;
-        else velocity.y = 0;
-    } else {
-        velocity.y -= GRAVITY * dt;
-        if (velocity.y < TERMINAL_VEL) velocity.y = TERMINAL_VEL;
-    }
+    // gravity
+    velocity.y -= GRAVITY * dt;
+    if (velocity.y < TERMINAL_VEL) velocity.y = TERMINAL_VEL;
 
     let nextY = player.position.y + velocity.y * dt;
 
     tryMoveHorizontal(moveDir.x, moveDir.z);
 
+    let wasOnGround = onGround;
     onGround = false;
 
     if (collidesWithWorld(player.position.x, nextY, player.position.z)) {
         if (velocity.y < 0) {
             onGround = true;
             canJump = true;
+
             const impactSpeed = -velocity.y;
             if (impactSpeed > SAFE_FALL_SPEED) {
                 const excess = impactSpeed - SAFE_FALL_SPEED;
@@ -1243,6 +1211,7 @@ function animate() {
                 health -= damage;
                 if (health < 0) health = 0;
                 updateHealthUI();
+
                 landingOffset = -Math.min(0.3, 0.05 + normalized * 0.25);
                 const dustCount = 5 + Math.floor(normalized * 10);
                 spawnLandingDust(player.position.x, player.position.y - PLAYER_HEIGHT / 2, player.position.z, dustCount);
@@ -1250,6 +1219,7 @@ function animate() {
             }
         }
         velocity.y = 0;
+
         if (health <= 0) respawnPlayer();
     } else {
         player.position.y = nextY;
@@ -1269,6 +1239,7 @@ function animate() {
         }
     }
 
+    // update crack effects
     if (crackEffects.length > 0) {
         const dtLocal = dt;
         for (let i = crackEffects.length - 1; i >= 0; i--) {
@@ -1284,6 +1255,7 @@ function animate() {
         }
     }
 
+    // update dust particles
     if (dustParticles.length > 0) {
         const dtLocal = dt;
         for (let i = dustParticles.length - 1; i >= 0; i--) {
@@ -1316,7 +1288,7 @@ window.addEventListener("resize", () => {
 
 window.addEventListener("beforeunload", () => {
     saveWorld();
-    savePlayerPosition();
+    if (typeof savePlayerPosition === "function") savePlayerPosition();
 });
 
 const blockedKeys = new Set([
