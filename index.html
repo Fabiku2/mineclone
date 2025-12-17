@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Mini Minecraft - Chunked (Step 10 – Save/Load)</title>
+<title>Mini Minecraft - Chunked (Steps 11–15)</title>
 
 <!-- Three.js CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -53,10 +53,14 @@
         color: white;
         font-size: 20px;
         position: relative;
+        /* NEW: hotbar selection animation */
+        transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, border-color 0.12s ease-out;
     }
 
     .selected {
         border-color: yellow;
+        transform: translateY(-4px);
+        box-shadow: 0 0 10px rgba(255, 255, 0, 0.6);
     }
 
     #blockName {
@@ -182,6 +186,12 @@
     </div>
 </div>
 
+<!-- NEW: basic sound effects -->
+<audio id="snd-jump"  src="sounds/jump.wav"  preload="auto"></audio>
+<audio id="snd-land"  src="sounds/land.wav"  preload="auto"></audio>
+<audio id="snd-break" src="sounds/break.wav" preload="auto"></audio>
+<audio id="snd-place" src="sounds/place.wav" preload="auto"></audio>
+
 <script>
 /* -------------------------------------------------------
    BASIC THREE.JS SETUP
@@ -268,12 +278,12 @@ const move = {
     right: false
 };
 
-// NEW: sprinting
+// sprinting
 let isSprinting = false;
 const WALK_SPEED = 0.08;
 const SPRINT_MULTIPLIER = 1.8;
 
-// NEW: crouching
+// crouching
 let isCrouching = false;
 const CROUCH_MULTIPLIER = 0.5; // slower while crouched
 
@@ -308,18 +318,18 @@ function onMouseMove(e) {
 /* -------------------------------------------------------
    LIGHTING
 ------------------------------------------------------- */
-const sunLight = new THREE.DirectionalLight(0xffffff, 1);
-sunLight.position.set(1, 2, 1);
+// MODIFIED: lighting for better depth
+const sunLight = new THREE.DirectionalLight(0xfff2cc, 1.1); // slightly warm, a bit stronger
+sunLight.position.set(0.8, 1.5, 0.5);
 scene.add(sunLight);
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+const ambientLight = new THREE.AmbientLight(0xb0c4ff, 0.35); // cool ambient to balance
 scene.add(ambientLight);
 
 /* -------------------------------------------------------
    MATERIALS
 ------------------------------------------------------- */
 // NEW: block colors / textures
-// FIXED: grass block faces
 // FIXED: grass block faces
 const grassTopMat    = new THREE.MeshStandardMaterial({ color: 0x55cc55 }); // bright green (top)
 const grassSideMat   = new THREE.MeshStandardMaterial({ color: 0x8B4513 }); // dirt brown (sides)
@@ -343,14 +353,16 @@ const baseGeometry = new THREE.BoxGeometry(1, 1, 1);
 baseGeometry.clearGroups();
 
 // Face order in BoxGeometry: +X, -X, +Y, -Y, +Z, -Z
-// Sides: +X, -X, +Z, -Z → indices 0, 1, 4, 5
-baseGeometry.addGroup(0 * 6, 6, 0); // +X → sides
-baseGeometry.addGroup(1 * 6, 6, 0); // -X → sides
-baseGeometry.addGroup(4 * 6, 6, 0); // +Z → sides
-baseGeometry.addGroup(5 * 6, 6, 0); // -Z → sides
+// Sides: +X, -X, +Z, -Z → material index 0
+baseGeometry.addGroup(0 * 6, 6, 0); // +X
+baseGeometry.addGroup(1 * 6, 6, 0); // -X
+baseGeometry.addGroup(4 * 6, 6, 0); // +Z
+baseGeometry.addGroup(5 * 6, 6, 0); // -Z
 
-baseGeometry.addGroup(2 * 6, 6, 1); // +Y → top
-baseGeometry.addGroup(3 * 6, 6, 2); // -Y → bottom
+// Top and bottom
+baseGeometry.addGroup(2 * 6, 6, 1); // +Y (top)
+baseGeometry.addGroup(3 * 6, 6, 2); // -Y (bottom)
+
 // Global block registry: world coords -> { type, chunkKey, index }
 const blocks = {};
 
@@ -542,7 +554,6 @@ function removeBlock(x, y, z) {
 // -------------------------------------------------------
 // NEW: save world
 // -------------------------------------------------------
-// Saves all blocks currently stored in the global `blocks` map.
 function saveWorld() {
     const worldData = [];
 
@@ -727,6 +738,42 @@ function isInsidePlayerAABB(x, y, z) {
 
 const tmpVector = new THREE.Vector3();
 
+// NEW: block breaking crack effect
+const crackMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 });
+const crackGeometries = new THREE.BoxGeometry(1.01, 1.01, 1.01);
+let crackEffects = []; // { mesh, life }
+
+function spawnCrackEffect(x, y, z) {
+    const edges = new THREE.EdgesGeometry(crackGeometries);
+    const line = new THREE.LineSegments(edges, crackMaterial.clone());
+    line.position.set(x, y, z);
+    scene.add(line);
+    crackEffects.push({ mesh: line, life: 0.15 }); // seconds
+}
+
+// NEW: landing dust particles
+const dustMaterial = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+const dustGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+let dustParticles = []; // { mesh, velocity, life }
+
+function spawnLandingDust(x, y, z, count) {
+    for (let i = 0; i < count; i++) {
+        const m = new THREE.Mesh(dustGeometry, dustMaterial);
+        m.position.set(
+            x + (Math.random() - 0.5) * 0.4,
+            y + 0.05,
+            z + (Math.random() - 0.5) * 0.4
+        );
+        const vel = new THREE.Vector3(
+            (Math.random() - 0.5) * 1.5,
+            Math.random() * 2.0,
+            (Math.random() - 0.5) * 1.5
+        );
+        scene.add(m);
+        dustParticles.push({ mesh: m, velocity: vel, life: 0.4 });
+    }
+}
+
 document.addEventListener("mousedown", (e) => {
     raycaster.setFromCamera(rayCenter, camera);
 
@@ -748,6 +795,13 @@ document.addEventListener("mousedown", (e) => {
         if (data) {
             inventory[data.type] = (inventory[data.type] || 0) + 1;
             updateInventoryUI();
+
+            // NEW: block breaking crack effect
+            spawnCrackEffect(bx, by, bz);
+
+            // NEW: block break sound
+            playSound(sndBreak);
+
             removeBlock(bx, by, bz);
         }
     } else if (e.button === 2) {
@@ -764,6 +818,9 @@ document.addEventListener("mousedown", (e) => {
                 addBlock(px, py, pz, selectedBlock);
                 inventory[selectedBlock]--;
                 updateInventoryUI();
+
+                // NEW: block place sound
+                playSound(sndPlace);
             }
         }
     }
@@ -793,6 +850,24 @@ document.addEventListener("keydown", (e) => {
 });
 
 /* -------------------------------------------------------
+   NEW: sound references
+------------------------------------------------------- */
+const sndJump  = document.getElementById("snd-jump");
+const sndLand  = document.getElementById("snd-land");
+const sndBreak = document.getElementById("snd-break");
+const sndPlace = document.getElementById("snd-place");
+
+function playSound(snd) {
+    if (!snd) return;
+    try {
+        snd.currentTime = 0;
+        snd.play();
+    } catch (e) {
+        // ignore playback errors
+    }
+}
+
+/* -------------------------------------------------------
    INPUT HANDLING (movement + sprint + crouch)
 ------------------------------------------------------- */
 document.addEventListener("keydown", (e) => {
@@ -811,6 +886,9 @@ document.addEventListener("keydown", (e) => {
             velocity.y = JUMP_SPEED;
             onGround = false;
             canJump = false;
+
+            // NEW: jump sound
+            playSound(sndJump);
         }
     }
 
@@ -1013,6 +1091,13 @@ function animate() {
                 updateHealthUI();
 
                 landingOffset = -Math.min(0.3, 0.05 + normalized * 0.25);
+
+                // NEW: landing dust particles
+                const dustCount = 5 + Math.floor(normalized * 10);
+                spawnLandingDust(player.position.x, player.position.y - PLAYER_HEIGHT / 2, player.position.z, dustCount);
+
+                // NEW: landing sound
+                playSound(sndLand);
             }
         }
         velocity.y = 0;
@@ -1037,6 +1122,37 @@ function animate() {
         if (text !== lastPosText) {
             lastPosText = text;
             playerPosLabel.textContent = text;
+        }
+    }
+
+    // update crack effects (fade out and remove)
+    if (crackEffects.length > 0) {
+        const dtLocal = dt;
+        for (let i = crackEffects.length - 1; i >= 0; i--) {
+            const c = crackEffects[i];
+            c.life -= dtLocal;
+            const mat = c.mesh.material;
+            mat.opacity = Math.max(0, c.life / 0.15);
+            mat.transparent = true;
+            if (c.life <= 0) {
+                scene.remove(c.mesh);
+                crackEffects.splice(i, 1);
+            }
+        }
+    }
+
+    // update landing dust particles
+    if (dustParticles.length > 0) {
+        const dtLocal = dt;
+        for (let i = dustParticles.length - 1; i >= 0; i--) {
+            const p = dustParticles[i];
+            p.velocity.y -= GRAVITY * 0.5 * dtLocal;
+            p.mesh.position.addScaledVector(p.velocity, dtLocal);
+            p.life -= dtLocal;
+            if (p.life <= 0) {
+                scene.remove(p.mesh);
+                dustParticles.splice(i, 1);
+            }
         }
     }
 
