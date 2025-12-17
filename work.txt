@@ -1,0 +1,36 @@
+give a full promt to make a ai make the clone minecraft with html css js with so much feautures
+i want you to generate a simpler version
+2 , 3
+i want it 3D first person
+i want it with html css js and all have to be in a single file
+camera have bug moving wierd not matching up with character and the block wierd bug too make promt for the ai to fix it
+now it working make a second promt to add few things more but not too many i go step by step
+now next step and when you jump you hit the ground too fast , make world 5x bigger
+now it so slow hiting the ground , add inventory , health bar , fall damage , faling animations promt
+game have fps drop make it fix it
+what is next step
+the ai bugged the movment i cant walk anymore
+it work now go to next step and make the ai sure that i have to can jump on top of a block i cant now and the camera dosent match with character height
+i dont want code from you only promts
+when i shift and click w or other button my chrome do some task is there a way to off that when we are in this web game using code if so give the promts
+Before I generate the full file…
+Do you want Option A or Option B?
+A) Patch instructions only (recommended)
+B) Full updated index.html with the prevention system integrated
+Tell me A or B, and I’ll proceed.
+
+what this mean
+next step
+make the promt that ai dont send whole codes give the added things only and said where do i put it
+add this rule at the step 9 promt and everytime you give promt have this rule in it
+the grass texture buggy i mean the sides not right
+next promt
+promt step 11 to 15 in one promt 
+add to promt to ai check my code from 
+https://github.com/Fabiku2/mineclone/blob/main/index.html
+now step 16 to 20 and change this in promt : Only provide new code snippets or small modifications with instructions on where to insert them, do NOT send the full file. type something give the full code and always important check the github link i give in promt always
+game is so much lagy like 1 fps make promt that ai fix it
+i dont want snippets for each litrealy make ai generate the full code change it in promt
+it still laggy but better make a promt to make it more fps i have rtx 3050 but still laggy
+the ai cannot able to generate full code give this exacly promt again with change that code the ai give have multiple part and dont close the html after ending part the maxmium part code line should be 800 line
+generate a promt to fix that bug and tell in promt that dont say the part number outside of not started <html because it will not be commented it ruin the code.
